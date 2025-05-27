@@ -3,10 +3,8 @@
 
 import type { ReactNode } from 'react';
 import React, { createContext, useState, useEffect, useCallback, useContext } from 'react';
-// Removed useRouter import as it's no longer used for direct navigation here
 import { auth } from '@/lib/firebase'; // Import Firebase auth instance
 import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User } from 'firebase/auth';
-import { useRouter } from 'next/navigation'; // Still needed for router.pathname checks if those were to be kept, but we're removing them. Let's remove it if not used. Actually, it *was* used for pathname checks, now it is not.
 
 interface AuthContextType {
   user: User | null;
@@ -21,45 +19,60 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  // const router = useRouter(); // No longer needed for push/replace here
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
+    let unsubscribe: (() => void) | undefined;
+    try {
+      unsubscribe = onAuthStateChanged(auth, 
+        (firebaseUser) => {
+          setUser(firebaseUser);
+          setIsLoading(false);
+        },
+        (error) => {
+          // This error callback is for the observer itself.
+          console.error("Firebase Auth state listener error:", error);
+          setUser(null); // On listener error, assume not authenticated
+          setIsLoading(false); // Ensure loading state is resolved
+        }
+      );
+    } catch (e) {
+      // Catch synchronous errors if onAuthStateChanged itself throws during setup (very rare)
+      console.error("Error setting up Firebase Auth state listener:", e);
+      setUser(null);
       setIsLoading(false);
-      // Redirection logic is removed from here.
-      // Pages/layouts will handle redirection based on auth state.
-    });
+    }
 
-    return () => unsubscribe(); // Cleanup subscription on unmount
-  }, []); // Dependencies array is now empty
+    return () => {
+      if (unsubscribe) {
+        unsubscribe(); // Cleanup subscription on unmount
+      }
+    };
+  }, []); 
 
   const loginWithGoogle = useCallback(async (): Promise<boolean> => {
     setIsLoading(true);
     const provider = new GoogleAuthProvider();
     try {
       await signInWithPopup(auth, provider);
-      // onAuthStateChanged will handle setting user.
-      // isLoading will be set to false by onAuthStateChanged.
+      // onAuthStateChanged will handle setting user and updating isLoading.
       return true;
     } catch (error) {
       console.error("Google Sign-In failed:", error);
-      setIsLoading(false); // Ensure loading is false on error
+      setIsLoading(false); // Ensure loading is false on explicit login error
       return false;
     }
   }, []);
 
   const logout = useCallback(async () => {
-    // setIsLoading(true); // Setting isLoading true here can cause a brief flash if onAuthStateChanged is quick.
-                         // onAuthStateChanged will set isLoading to false after user becomes null.
-                         // If immediate feedback is needed, keep it, but typically not necessary.
+    // setIsLoading(true); // Usually not needed, onAuthStateChanged handles it.
     try {
       await signOut(auth);
       // onAuthStateChanged will handle setting user to null and isLoading to false.
     } catch (error) {
       console.error("Sign out failed:", error);
-      // If signOut fails, isLoading might remain true if we set it above and don't reset here.
-      // It's safer to let onAuthStateChanged handle isLoading uniformly.
+      // If signOut fails, onAuthStateChanged might not fire or user might not change.
+      // Setting isLoading false here could be an option, but better to rely on onAuthStateChanged if possible.
+      // For now, we assume onAuthStateChanged will eventually reflect the state or an error.
     }
   }, []);
 
@@ -83,4 +96,3 @@ export const useAuth = () => {
   }
   return context;
 };
-
