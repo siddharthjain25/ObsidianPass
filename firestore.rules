@@ -1,0 +1,43 @@
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can only manage credentials within their own user directory.
+    match /users/{userId}/credentials/{credId} {
+      // Helper function to check if the request is from the owner.
+      function isOwner() {
+        return request.auth != null && request.auth.uid == userId;
+      }
+
+      // Helper function to check if the data being written has the correct userId.
+      // This is important for create and update operations.
+      function incomingDataHasCorrectUserId() {
+        return request.resource.data.userId == userId;
+      }
+
+      allow read, delete: if isOwner();
+      
+      allow create: if isOwner() && incomingDataHasCorrectUserId();
+      
+      // For update, ensure they are the owner and not trying to change the userId field.
+      // Also ensure the incoming data still claims the correct userId.
+      allow update: if isOwner() && incomingDataHasCorrectUserId()
+                       && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['websiteName', 'websiteUrl', 'username', 'encryptedData']); 
+                       // Add other fields here if they become updatable by the user.
+                       // 'createdAt' and 'userId' should generally not be updatable by client after creation.
+    }
+
+    // Optionally, you might want to restrict creation of user documents themselves
+    // if user profiles are created through a different mechanism or not directly by clients.
+    // For this app, user documents are implicitly created when credentials are added.
+    // To prevent arbitrary user document creation, you might add:
+    // match /users/{userId} {
+    //   allow read, write: if request.auth != null && request.auth.uid == userId;
+    //   // Or, more restrictively:
+    //   // allow get: if request.auth != null && request.auth.uid == userId; // Allow reading own user doc if it exists
+    //   // allow list: if false; // Don't allow listing all user docs
+    //   // allow create, update, delete: if false; // Prevent direct manipulation of user doc
+    // }
+  }
+}
