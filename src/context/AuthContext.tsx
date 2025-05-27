@@ -4,7 +4,7 @@
 import type { ReactNode } from 'react';
 import React, { createContext, useState, useEffect, useCallback, useContext } from 'react';
 import { auth } from '@/lib/firebase'; // Import Firebase auth instance
-import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User } from 'firebase/auth';
+import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, type User, setPersistence, browserLocalPersistence } from 'firebase/auth';
 
 interface AuthContextType {
   user: User | null;
@@ -22,32 +22,52 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
-    try {
-      unsubscribe = onAuthStateChanged(auth, 
+
+    const setupAuthListener = () => {
+      unsubscribe = onAuthStateChanged(auth,
         (firebaseUser) => {
           setUser(firebaseUser);
           setIsLoading(false);
         },
         (error) => {
-          // This error callback is for the observer itself.
           console.error("Firebase Auth state listener error:", error);
-          setUser(null); // On listener error, assume not authenticated
-          setIsLoading(false); // Ensure loading state is resolved
+          setUser(null);
+          setIsLoading(false);
         }
       );
-    } catch (e) {
-      // Catch synchronous errors if onAuthStateChanged itself throws during setup (very rare)
-      console.error("Error setting up Firebase Auth state listener:", e);
-      setUser(null);
-      setIsLoading(false);
-    }
+    };
+
+    // Try to set persistence first.
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        // If persistence is set successfully, then set up the auth state listener.
+        setupAuthListener();
+      })
+      .catch((error) => {
+        console.error("Error setting Firebase auth persistence:", error);
+        // If setting persistence fails, still attempt to set up the listener.
+        // Auth state might not persist across sessions/tabs as expected.
+        // Also ensure isLoading is set to false to avoid getting stuck.
+        setupAuthListener(); // Or, you might decide to set user to null and isLoading to false immediately.
+        // For now, we still try to listen, but acknowledge persistence might be an issue.
+        // If persistence is critical and fails, you might want a different error handling strategy.
+        // However, we must ensure isLoading is eventually false.
+        // If setupAuthListener also fails, its own error handler should set isLoading to false.
+        // If onAuthStateChanged never fires after a persistence error, isLoading might remain true.
+        // So, if persistence fails, we might consider not even trying to listen or setting a default state.
+        // For now, let's ensure isLoading is false if THIS catch block is hit and listener wasn't setup properly.
+        if (!unsubscribe) { // Check if listener was setup by the .then() block
+            setUser(null);
+            setIsLoading(false);
+        }
+      });
 
     return () => {
       if (unsubscribe) {
         unsubscribe(); // Cleanup subscription on unmount
       }
     };
-  }, []); 
+  }, []);
 
   const loginWithGoogle = useCallback(async (): Promise<boolean> => {
     setIsLoading(true);
@@ -64,25 +84,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const logout = useCallback(async () => {
-    // setIsLoading(true); // Usually not needed, onAuthStateChanged handles it.
     try {
       await signOut(auth);
-      // onAuthStateChanged will handle setting user to null and isLoading to false.
     } catch (error) {
       console.error("Sign out failed:", error);
-      // If signOut fails, onAuthStateChanged might not fire or user might not change.
-      // Setting isLoading false here could be an option, but better to rely on onAuthStateChanged if possible.
-      // For now, we assume onAuthStateChanged will eventually reflect the state or an error.
     }
   }, []);
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      isAuthenticated: !!user, 
-      isLoading, 
-      loginWithGoogle, 
-      logout 
+    <AuthContext.Provider value={{
+      user,
+      isAuthenticated: !!user,
+      isLoading,
+      loginWithGoogle,
+      logout
     }}>
       {children}
     </AuthContext.Provider>
